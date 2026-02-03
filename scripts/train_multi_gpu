@@ -1,0 +1,57 @@
+#!/bin/bash
+#SBATCH --job-name=self_distill
+#SBATCH --output=output/experiment-%A.%a.out
+#SBATCH --error=error/experiment-%A.%a.err
+#SBATCH --time=0-03:00:00
+#SBATCH --nodes=1                       # number of nodes
+#SBATCH --gpus-per-task=4               # number of gpus per node
+#SBATCH --cpus-per-task=24              # number of cpus per gpu
+#SBATCH --mem=0                         # all memory per node
+#SBATCH --ntasks-per-node=1             # crucial - only 1 task per node!
+#SBATCH --constraint=80gb               # constraints
+#SBATCH --exclude=cn-k[001-002]
+#SBATCH --partition=short-unkillable
+
+
+set -e
+
+# Create log directories
+mkdir -p $SCRATCH/arena-capstone/logs
+
+# Setup environment
+module load anaconda/3 cudatoolkit/12.6.0
+conda activate $SCRATCH/arena-capstone/venv
+
+export HF_HOME=$SCRATCH
+export WANDB_MODE=online
+export OMP_NUM_THREADS=4
+
+# Distributed training environment
+export MASTER_ADDR=$(hostname)
+export MASTER_PORT=29500
+
+cd $SCRATCH/arena-capstone/Self-Distillation
+
+CONFIG_NAME="${CONFIG:-qwen3_1.7b}"
+OVERRIDES="${OVERRIDES:-}"
+NUM_GPUS=4
+
+echo "=============================================="
+echo "Self-Distillation Training"
+echo "=============================================="
+echo "Date: $(date)"
+echo "Node: $(hostname)"
+echo "GPUs: $NUM_GPUS"
+echo "Config: $CONFIG_NAME"
+echo "Overrides: $OVERRIDES"
+echo "=============================================="
+
+nvidia-smi
+
+# Run with accelerate for multi-GPU training
+accelerate launch \
+  --num_processes $NUM_GPUS \
+  --mixed_precision bf16 \
+  main.py --config-name $CONFIG_NAME $OVERRIDES
+
+echo "Training completed at $(date)"

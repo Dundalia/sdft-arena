@@ -1,0 +1,21 @@
+# Configuration for Qwen3-1.7B (small, good for testing)
+defaults:
+  - config
+  - _self_
+
+model:
+  name: "Qwen/Qwen3-1.7B"
+
+training:
+  output_dir: "outputs/qwen3-1.7b"
+  per_device_train_batch_size: 1
+  num_prompts_per_batch: 8
+
+vllm:
+  gpu_memory_utilization: 0.5
+  enable_sleep_mode: false
+
+# Weights & Biases settings
+wandb:
+  project: "self-distillation"
+  run_name: "qwen3-1.7b-tooluse"

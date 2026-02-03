@@ -1,0 +1,13 @@
+# Configuration for Qwen3-8B (large, needs careful memory management)
+defaults:
+  - config
+  - _self_
+
+model:
+  name: "Qwen/Qwen3-8B"
+
+training:
+  output_dir: "outputs/qwen3-8b"
+
+vllm:
+  gpu_memory_utilization: 0.25  # Lower to leave more memory for training

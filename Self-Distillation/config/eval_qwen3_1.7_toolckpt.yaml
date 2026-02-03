@@ -1,0 +1,24 @@
+model:
+  checkpoint_path: "outputs/qwen3-1.7b/checkpoint-1011"
+  torch_dtype: "bfloat16"
+
+evaluation:
+  evaluate_on: "all"
+  max_samples: 100 # null if all
+  batch_size: 8
+  seed: 42
+
+vllm:
+  gpu_memory_utilization: 0.9
+  tensor_parallel_size: 1
+  max_new_tokens: 2048
+  temperature: 0.0
+  top_p: 1.0
+
+output:
+  results_subdir: "eval_qwen3_1.7_toolckpt"
+  save_predictions: true
+  save_stats: true
+
+logging:
+  verbose: true

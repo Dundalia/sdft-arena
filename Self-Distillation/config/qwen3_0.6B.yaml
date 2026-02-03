@@ -1,0 +1,13 @@
+# Configuration for Qwen3-0.6B (small, good for testing)
+defaults:
+  - config
+  - _self_
+
+model:
+  name: "Qwen/Qwen3-0.6B"
+
+training:
+  output_dir: "outputs/qwen3-0.6b"
+
+vllm:
+  gpu_memory_utilization: 0.3

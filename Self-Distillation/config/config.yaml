@@ -1,0 +1,61 @@
+# Default configuration for Self-Distillation training
+defaults:
+  - _self_
+
+# Model settings
+model:
+  name: "Qwen/Qwen3-1.7B"
+  torch_dtype: "bfloat16"
+
+# Training hyperparameters
+training:
+  output_dir: "outputs/default"
+  learning_rate: 2e-5
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  num_prompts_per_batch: 32  # gradient_accumulation_steps
+  max_grad_norm: 1.0
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  seed: 42
+
+# Sequence lengths
+sequence:
+  max_prompt_length: 1024
+  max_completion_length: 1024
+
+# Distillation settings
+distillation:
+  ref_model_mixup_alpha: 0.01
+  ref_model_sync_steps: 1
+  sync_ref_model: true
+  num_loss_tokens_to_skip: 3
+
+# vLLM settings
+vllm:
+  use_vllm: true
+  mode: "colocate"
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.3
+  enable_sleep_mode: true
+  importance_sampling_correction: true
+
+# Logging settings
+logging:
+  logging_steps: 1
+  save_steps: 100
+  log_completions: false
+  report_to: "wandb"
+
+# Weights & Biases settings
+wandb:
+  project: "self-distillation"
+  run_name: null  # Will be auto-generated if not set
+
+# Hydra settings
+hydra:
+  run:
+    dir: ${training.output_dir}
+  sweep:
+    dir: outputs/sweeps
+    subdir: ${hydra.job.num}

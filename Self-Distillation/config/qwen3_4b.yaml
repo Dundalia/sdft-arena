@@ -1,0 +1,13 @@
+# Configuration for Qwen3-4B (medium, recommended for 4x A100)
+defaults:
+  - config
+  - _self_
+
+model:
+  name: "Qwen/Qwen3-4B"
+
+training:
+  output_dir: "outputs/qwen3-4b"
+
+vllm:
+  gpu_memory_utilization: 0.3
