@@ -1,0 +1,51 @@
+# Default configuration for SFT (Supervised Fine-Tuning) baseline training
+defaults:
+  - _self_
+
+# Model settings
+model:
+  name: "Qwen/Qwen3-1.7B"
+  torch_dtype: "bfloat16"
+  use_flash_attention: false  # Set to true if flash-attn is installed
+
+# Training hyperparameters
+training:
+  output_dir: "outputs/sft"
+  learning_rate: 2e-5
+  num_train_epochs: 8
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 32
+  max_grad_norm: 1.0
+  warmup_ratio: 0.1
+  lr_scheduler_type: "cosine"
+  seed: 42
+  bf16: true
+  fp16: false
+  gradient_checkpointing: true
+
+# Sequence settings
+sequence:
+  max_seq_length: 2048
+  packing: false  # Set to true for more efficient training if sequences are short
+
+# Logging settings
+logging:
+  logging_steps: 10
+  save_steps: 100
+  save_total_limit: 3
+  report_to: "wandb"
+  eval_strategy: "steps"
+  eval_steps: 100
+
+# Weights & Biases settings
+wandb:
+  project: "self-distillation"
+  run_name: null  # Will be auto-generated as "{model_name}-sft" if not set
+
+# Hydra settings
+hydra:
+  run:
+    dir: ${training.output_dir}
+  sweep:
+    dir: outputs/sft_sweeps
+    subdir: ${hydra.job.num}

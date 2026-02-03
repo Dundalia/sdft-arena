@@ -19,7 +19,7 @@ Usage:
 """
 
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, ListConfig
 from distil_trainer import DistilTrainer
 from distil_config import DistilConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -27,6 +27,7 @@ import torch
 from datasets import Dataset
 from string import Template
 import os
+from peft import LoraConfig, get_peft_model
 
 
 def load_tooluse_dataset(seed=42) -> Dataset:
@@ -98,6 +99,28 @@ def main(cfg: DictConfig):
         cfg.model.name,
         torch_dtype=torch_dtype,
     )
+    
+    # Setup LoRA configuration if specified
+    if cfg.model.get("lora") is not None:
+        lora_cfg = cfg.model.lora
+        # Convert ListConfig to list if needed
+        target_modules = lora_cfg.target_modules
+        if isinstance(target_modules, ListConfig):
+            target_modules = list(target_modules)
+        
+        peft_config = LoraConfig(
+            r=lora_cfg.r,
+            lora_alpha=lora_cfg.lora_alpha,
+            target_modules=target_modules,
+            lora_dropout=lora_cfg.lora_dropout,
+            bias=lora_cfg.bias,
+            task_type=lora_cfg.task_type,
+        )
+        print(f"Using LoRA with r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, target_modules={target_modules}")
+        
+        # Wrap model with LoRA
+        model = get_peft_model(model, peft_config)
+        model.print_trainable_parameters()
     
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
     train_dataset, eval_dataset = load_tooluse_dataset(cfg.training.seed)

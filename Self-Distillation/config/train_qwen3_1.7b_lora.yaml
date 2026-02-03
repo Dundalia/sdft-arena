@@ -1,0 +1,27 @@
+# Configuration for Qwen3-1.7B with LoRA (small, good for testing)
+defaults:
+  - config
+  - _self_
+
+model:
+  name: "Qwen/Qwen3-1.7B"
+  lora:
+    r: 64
+    lora_alpha: 16
+    target_modules: "all-linear"
+    lora_dropout: 0.1
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+training:
+  output_dir: "outputs/qwen3-1.7b-lora"
+  per_device_train_batch_size: 1
+  num_prompts_per_batch: 8
+
+vllm:
+  gpu_memory_utilization: 0.5
+  enable_sleep_mode: false
+
+wandb:
+  project: "self-distillation"
+  run_name: "qwen3-1.7b-tooluse-lora"

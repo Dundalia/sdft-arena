@@ -285,6 +285,48 @@ class ToolUseEvaluator(BaseDatasetEvaluator):
         # The prompt already contains the full instruction
         return sample.prompt
     
+    def _normalize_action_input(self, action_input: str) -> Optional[Dict]:
+        """Parse and normalize action input JSON for comparison."""
+        if not action_input:
+            return None
+        try:
+            # Try to parse as JSON
+            parsed = json.loads(action_input)
+            return parsed
+        except (json.JSONDecodeError, TypeError):
+            # Return as-is if not valid JSON
+            return action_input
+    
+    def _action_inputs_match(self, golden_input: str, extracted_input: str) -> bool:
+        """Check if two action inputs match (handles JSON comparison)."""
+        golden_parsed = self._normalize_action_input(golden_input)
+        extracted_parsed = self._normalize_action_input(extracted_input)
+        
+        # Both are dicts - compare as dicts (order-independent)
+        if isinstance(golden_parsed, dict) and isinstance(extracted_parsed, dict):
+            return golden_parsed == extracted_parsed
+        
+        # Fallback to string comparison (normalized)
+        golden_str = str(golden_input).strip().lower() if golden_input else ""
+        extracted_str = str(extracted_input).strip().lower() if extracted_input else ""
+        return golden_str == extracted_str
+    
+    def _actions_match(self, golden: Dict, extracted: Dict) -> bool:
+        """Check if both Action name and Action_Input match."""
+        # Check action name
+        if extracted.get('Action', '').lower() != golden.get('Action', '').lower():
+            return False
+        
+        # Check action input
+        golden_input = golden.get('Action_Input', '')
+        extracted_input = extracted.get('Action_Input', '')
+        
+        # If golden has no input specified, only match on action name
+        if not golden_input:
+            return True
+        
+        return self._action_inputs_match(golden_input, extracted_input)
+    
     def evaluate_response(self, sample: EvalSample, generated: str) -> Tuple[bool, Dict[str, Any]]:
         """Evaluate if the generated response contains the correct actions."""
         golden_actions = sample.reference
@@ -295,27 +337,47 @@ class ToolUseEvaluator(BaseDatasetEvaluator):
         # Check if all golden actions are present (order-independent for now)
         correct_actions = 0
         total_golden = len(golden_actions)
+        total_extracted = len(extracted_actions)
         
         matched_actions = []
+        used_extracted = set()  # Track which extracted actions have been matched
+        
         for golden in golden_actions:
-            golden_action = golden.get('Action', '')
-            for extracted in extracted_actions:
-                if extracted.get('Action', '').lower() == golden_action.lower():
+            for idx, extracted in enumerate(extracted_actions):
+                if idx in used_extracted:
+                    continue
+                if self._actions_match(golden, extracted):
                     correct_actions += 1
-                    matched_actions.append(golden_action)
+                    matched_actions.append({
+                        'Action': golden.get('Action', ''),
+                        'Action_Input': golden.get('Action_Input', '')
+                    })
+                    used_extracted.add(idx)
                     break
         
-        # Consider correct if all golden actions are found
-        is_correct = correct_actions == total_golden and total_golden > 0
+        # Count extracted actions that match any golden action (for precision)
+        correct_extracted = 0
+        for extracted in extracted_actions:
+            for golden in golden_actions:
+                if self._actions_match(golden, extracted):
+                    correct_extracted += 1
+                    break
         
-        # Partial credit metric
+        # Compute precision and recall
         action_recall = correct_actions / total_golden if total_golden > 0 else 0.0
+        action_precision = correct_extracted / total_extracted if total_extracted > 0 else 0.0
+        
+        # Exact match: both precision and recall are 1.0
+        is_correct = (action_precision == 1.0 and action_recall == 1.0) and total_golden > 0
         
         return is_correct, {
             'extracted_actions': extracted_actions,
             'golden_actions': golden_actions,
             'matched_actions': matched_actions,
             'action_recall': action_recall,
+            'action_precision': action_precision,
+            'num_extracted': total_extracted,
+            'num_golden': total_golden,
             'tool_name': sample.metadata.get('name', '')
         }
     
@@ -342,9 +404,17 @@ class ToolUseEvaluator(BaseDatasetEvaluator):
         """Compute stats including action recall metrics."""
         base_stats = super().compute_stats(results)
         
-        # Compute average action recall
+        # Compute average action recall and precision
         recalls = [r.metadata.get('action_recall', 0.0) for r in results]
+        precisions = [r.metadata.get('action_precision', 0.0) for r in results]
         avg_recall = sum(recalls) / len(recalls) if recalls else 0.0
+        avg_precision = sum(precisions) / len(precisions) if precisions else 0.0
+        
+        # Compute F1 score
+        if avg_precision + avg_recall > 0:
+            avg_f1 = 2 * (avg_precision * avg_recall) / (avg_precision + avg_recall)
+        else:
+            avg_f1 = 0.0
         
         # Per-tool statistics
         tool_results: Dict[str, List[bool]] = {}
@@ -367,6 +437,8 @@ class ToolUseEvaluator(BaseDatasetEvaluator):
         base_stats.per_category_stats = per_category_stats
         base_stats.additional_metrics = {
             'avg_action_recall': avg_recall,
+            'avg_action_precision': avg_precision,
+            'avg_f1': avg_f1,
             'exact_match_rate': base_stats.accuracy
         }
         
@@ -380,6 +452,9 @@ class ToolUseEvaluator(BaseDatasetEvaluator):
 DATASET_EVALUATORS = {
     'mmlu': MMLUEvaluator,
     'tooluse_data': ToolUseEvaluator,
+    'tooluse_train': ToolUseEvaluator,
+    'tooluse_real': ToolUseEvaluator,
+    'tooluse_sim': ToolUseEvaluator,
 }
 
 
