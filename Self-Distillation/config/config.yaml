@@ -2,6 +2,10 @@
 defaults:
   - _self_
 
+# Data settings
+data:
+  folder: "data/tooluse_data"  # Path to data folder containing train_data.json and eval_data.json
+
 # Model settings
 model:
   name: "Qwen/Qwen3-1.7B"
@@ -18,6 +22,9 @@ training:
   warmup_ratio: 0.1
   lr_scheduler_type: "cosine"
   seed: 42
+  # If set, only train bias vectors at these layer indices (e.g., [10, 15, 20])
+  # If null, perform full fine-tuning
+  layers_trainable_bias: null
 
 # Sequence lengths
 sequence:
@@ -46,6 +53,13 @@ logging:
   save_steps: 100
   log_completions: false
   report_to: "wandb"
+
+# Evaluation settings
+evaluation:
+  do_eval: true              # Whether to run evaluation during training
+  eval_strategy: "steps"     # "steps" or "epoch"
+  eval_steps: 100            # Evaluate every N steps (if eval_strategy="steps")
+  eval_size: null            # Size of eval subset (null = use full eval set)
 
 # Weights & Biases settings
 wandb:

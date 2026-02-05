@@ -1,0 +1,20 @@
+defaults:
+  - sft_config 
+  - _self_
+
+model:
+  name: "Qwen/Qwen3-1.7B"
+  torch_dtype: "bfloat16"
+  use_flash_attention: false
+
+training:
+  output_dir: "outputs/sft-qwen3-1.7b-bias"
+  per_device_train_batch_size: 16
+  gradient_accumulation_steps: 2
+  layers_trainable_bias: [17]
+  gradient_checkpointing: false
+
+wandb:
+  project: "self-distillation"
+  run_name: "sft-qwen3-1.7b-bias"
+

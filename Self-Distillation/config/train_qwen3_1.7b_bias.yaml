@@ -1,0 +1,14 @@
+defaults:
+  - config  # Inherit from default config
+  - _self_
+
+training:
+  output_dir: "outputs/qwen3-1.7b-bias-only"
+  learning_rate: 1e-4  # Higher LR since we're training fewer params
+  num_train_epochs: 3
+  layers_trainable_bias: [18]
+  gradient_checkpointing: false
+
+
+wandb:
+  run_name: "qwen3-1.7b-bias-only"

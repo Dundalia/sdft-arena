@@ -28,12 +28,19 @@ from datasets import Dataset
 from string import Template
 import os
 from peft import LoraConfig, get_peft_model
+from model_utils import setup_model_for_training
 
 
-def load_tooluse_dataset(seed=42) -> Dataset:
-    """Load and prepare tooluse dataset with formatted prompts."""
-    train_path = 'data/tooluse_data/train_data.json'
-    test_path = 'data/tooluse_data/eval_data.json'
+def load_tooluse_dataset(data_folder: str, seed: int = 42, eval_size: int = None) -> Dataset:
+    """Load and prepare tooluse dataset with formatted prompts.
+    
+    Args:
+        data_folder: Path to data folder containing train_data.json and eval_data.json
+        seed: Random seed for shuffling
+        eval_size: If set, use only this many samples from eval set (for faster eval)
+    """
+    train_path = f'{data_folder}/train_data.json'
+    test_path = f'{data_folder}/eval_data.json'
     train_dataset = Dataset.from_json(train_path)
     test_dataset = Dataset.from_json(test_path)
 
@@ -55,8 +62,49 @@ Now answer with a response of your own, including the thinking process.
             )}],
         }
     
+    def format_eval_example(example):
+        """Format eval example - uses golden_answer field instead of golden_response."""
+        golden_answer = example['golden_answer']
+        if isinstance(golden_answer, list):
+            # Convert action dicts to string representation
+            response_parts = []
+            for action in golden_answer:
+                if isinstance(action, dict):
+                    action_str = f"Action: {action.get('Action', '')}\nAction Input: {action.get('Action_Input', '')}"
+                    response_parts.append(action_str)
+                else:
+                    response_parts.append(str(action))
+            output_text = '\n'.join(response_parts)
+        else:
+            output_text = str(golden_answer)
+        
+        teacher_prompt = Template("""
+$orig_content
+
+This is an example for a response to the question:
+$output_text
+
+Now answer with a response of your own, including the thinking process.
+""")
+
+        return {
+            "prompt": [{"role": "user", "content": example['prompt']}],
+            "teacher_prompt": [{"role": "user", "content": teacher_prompt.substitute(
+                orig_content=example['prompt'], 
+                output_text=output_text
+            )}],
+        }
+    
     train_dataset = train_dataset.map(format_example, remove_columns=train_dataset.column_names)
     train_dataset = train_dataset.shuffle(seed=seed)
+    
+    # Format eval dataset
+    test_dataset = test_dataset.map(format_eval_example, remove_columns=test_dataset.column_names)
+    
+    # Optionally subset the eval dataset
+    if eval_size is not None and eval_size < len(test_dataset):
+        test_dataset = test_dataset.shuffle(seed=seed).select(range(eval_size))
+    
     return train_dataset, test_dataset
 
 
@@ -122,10 +170,26 @@ def main(cfg: DictConfig):
         model = get_peft_model(model, peft_config)
         model.print_trainable_parameters()
     
+    # Setup trainable bias injection if specified (mutually exclusive with LoRA)
+    elif cfg.training.get("layers_trainable_bias") is not None:
+        layers = cfg.training.layers_trainable_bias
+        # Convert ListConfig to list if needed
+        if isinstance(layers, ListConfig):
+            layers = list(layers)
+        model = setup_model_for_training(model, layers_trainable_bias=layers)
+    
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
-    train_dataset, eval_dataset = load_tooluse_dataset(cfg.training.seed)
+    
+    # Get eval size from config
+    eval_size = cfg.evaluation.get("eval_size", None)
+    train_dataset, eval_dataset = load_tooluse_dataset(
+        data_folder=cfg.data.folder,
+        seed=cfg.training.seed,
+        eval_size=eval_size
+    )
     
     print(f"Train dataset size: {len(train_dataset)}")
+    print(f"Eval dataset size: {len(eval_dataset)}")
 
     # Configure training - use hydra's output directory
     output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
@@ -178,7 +242,15 @@ def main(cfg: DictConfig):
         save_steps=cfg.logging.save_steps,
         log_completions=cfg.logging.log_completions,
         report_to=cfg.logging.report_to,
+        
+        # Evaluation settings
+        do_eval=cfg.evaluation.get("do_eval", False),
+        eval_strategy=cfg.evaluation.get("eval_strategy", "steps") if cfg.evaluation.get("do_eval", False) else "no",
+        eval_steps=cfg.evaluation.get("eval_steps", 100),
     )
+    
+    # Prepare eval dataset (only if do_eval is True)
+    eval_dataset_for_trainer = eval_dataset if cfg.evaluation.get("do_eval", False) else None
     
     # Initialize trainer
     trainer = DistilTrainer(
@@ -186,6 +258,7 @@ def main(cfg: DictConfig):
         ref_model=teacher_model,
         args=config,
         train_dataset=train_dataset,
+        eval_dataset=eval_dataset_for_trainer,
         processing_class=tokenizer,
     )
     

@@ -28,9 +28,10 @@ import torch
 from datasets import Dataset
 import os
 from peft import LoraConfig
+from model_utils import setup_model_for_training
 
 
-def load_tooluse_dataset(seed: int = 42) -> tuple[Dataset, Dataset]:
+def load_tooluse_dataset(data_folder: str, seed: int = 42, eval_size: int = None) -> tuple[Dataset, Dataset]:
     """
     Load and prepare tooluse dataset formatted for SFT training.
     
@@ -43,9 +44,14 @@ def load_tooluse_dataset(seed: int = 42) -> tuple[Dataset, Dataset]:
     Note: train_data has 'golden_response' field with text responses.
           eval_data has 'golden_answer' field with structured action dicts.
           For SFT eval, we only use train prompts (eval will be done separately).
+    
+    Args:
+        data_folder: Path to data folder containing train_data.json and eval_data.json
+        seed: Random seed for shuffling
+        eval_size: If set, use only this many samples from eval set (for faster eval)
     """
-    train_path = 'data/tooluse_data/train_data.json'
-    test_path = 'data/tooluse_data/eval_data.json'
+    train_path = f'{data_folder}/train_data.json'
+    test_path = f'{data_folder}/eval_data.json'
     
     train_dataset = Dataset.from_json(train_path)
     test_dataset = Dataset.from_json(test_path)
@@ -104,6 +110,10 @@ def load_tooluse_dataset(seed: int = 42) -> tuple[Dataset, Dataset]:
         remove_columns=test_dataset.column_names
     )
     
+    # Optionally subset the eval dataset
+    if eval_size is not None and eval_size < len(test_dataset):
+        test_dataset = test_dataset.shuffle(seed=seed).select(range(eval_size))
+    
     return train_dataset, test_dataset
 
 
@@ -149,8 +159,13 @@ def main(cfg: DictConfig):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Load dataset
-    train_dataset, eval_dataset = load_tooluse_dataset(cfg.training.seed)
+    # Load dataset with optional eval size limit
+    eval_size = cfg.evaluation.get("eval_size", None)
+    train_dataset, eval_dataset = load_tooluse_dataset(
+        data_folder=cfg.data.folder,
+        seed=cfg.training.seed,
+        eval_size=eval_size
+    )
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Eval dataset size: {len(eval_dataset)}")
 
@@ -197,13 +212,17 @@ def main(cfg: DictConfig):
         save_total_limit=cfg.logging.get("save_total_limit", 3),
         report_to=cfg.logging.report_to,
         
-        # Evaluation
-        eval_strategy=cfg.logging.get("eval_strategy", "steps"),
-        eval_steps=cfg.logging.get("eval_steps", cfg.logging.save_steps),
+        # Evaluation settings
+        do_eval=cfg.evaluation.get("do_eval", False),
+        eval_strategy=cfg.evaluation.get("eval_strategy", "steps") if cfg.evaluation.get("do_eval", False) else "no",
+        eval_steps=cfg.evaluation.get("eval_steps", 100),
         
         # Dataset
         dataset_text_field=None,  # We use messages format
     )
+    
+    # Prepare eval dataset (only if do_eval is True)
+    eval_dataset_for_trainer = eval_dataset if cfg.evaluation.get("do_eval", False) else None
     
     # Setup LoRA configuration if specified
     peft_config = None
@@ -224,12 +243,20 @@ def main(cfg: DictConfig):
         )
         print(f"Using LoRA with r={lora_cfg.r}, alpha={lora_cfg.lora_alpha}, target_modules={target_modules}")
     
+    # Setup trainable bias injection if specified (mutually exclusive with LoRA)
+    elif cfg.training.get("layers_trainable_bias") is not None:
+        layers = cfg.training.layers_trainable_bias
+        # Convert ListConfig to list if needed
+        if isinstance(layers, ListConfig):
+            layers = list(layers)
+        model = setup_model_for_training(model, layers_trainable_bias=layers)
+    
     # Initialize trainer
     trainer = SFTTrainer(
         model=model,
         args=config,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=eval_dataset_for_trainer,
         processing_class=tokenizer,
         peft_config=peft_config,
     )
