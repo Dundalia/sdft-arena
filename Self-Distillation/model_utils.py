@@ -76,6 +76,69 @@ def inject_trainable_bias(
     return model
 
 
+def load_model_with_bias(
+    base_model_id: str,
+    checkpoint_path: str,
+    layers: List[int],
+    **kwargs
+) -> nn.Module:
+    """
+    Load a model with injected bias layers from a checkpoint.
+    
+    This function:
+    1. Loads the base model architecture
+    2. Injects the bias layers to match the training configuration
+    3. Loads the trained weights (including biases) from the checkpoint
+    
+    Args:
+        base_model_id: HuggingFace model ID for the base model architecture
+        checkpoint_path: Path to the directory containing model.safetensors or pytorch_model.bin
+        layers: List of layer indices that have trainable biases (MUST match training config)
+        **kwargs: Additional arguments passed to AutoModelForCausalLM.from_pretrained
+    
+    Returns:
+        The loaded model with trained biases
+    """
+    from transformers import AutoModelForCausalLM
+    from safetensors.torch import load_file
+    import os
+    
+    print(f"Loading base model: {base_model_id}")
+    model = AutoModelForCausalLM.from_pretrained(base_model_id, **kwargs)
+    
+    print(f"Injecting bias layers at: {layers}")
+    model = inject_trainable_bias(model, layers)
+    
+    print(f"Loading weights from: {checkpoint_path}")
+    if os.path.exists(os.path.join(checkpoint_path, "model.safetensors")):
+        state_dict = load_file(os.path.join(checkpoint_path, "model.safetensors"))
+    elif os.path.exists(os.path.join(checkpoint_path, "pytorch_model.bin")):
+        state_dict = torch.load(os.path.join(checkpoint_path, "pytorch_model.bin"))
+    else:
+        # Try loading sharded checkpoints if single file doesn't exist
+        try:
+            from transformers.modeling_utils import load_sharded_checkpoint
+            load_sharded_checkpoint(model, checkpoint_path)
+            print("Loaded sharded checkpoint.")
+            return model
+        except Exception as e:
+            raise FileNotFoundError(f"Could not find model weights in {checkpoint_path}")
+
+    # Load state dict with strict=False to allow for minor metadata mismatches, 
+    # but ensure our biases are loaded
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+    
+    print("Weights loaded.")
+    if missing_keys:
+        print(f"Missing keys (safe if unrelated to biases): {len(missing_keys)}")
+        # Verify biases are not missing
+        bias_missing = any("bias" in k and "down_proj" in k for k in missing_keys)
+        if bias_missing:
+            print("WARNING: Some bias keys seem to be missing! Check your layer config.")
+            
+    return model
+
+
 def setup_model_for_training(
     model: nn.Module,
     layers_trainable_bias: Optional[List[int]] = None,

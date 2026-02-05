@@ -43,9 +43,19 @@ def load_tooluse_dataset(data_folder: str, seed: int = 42, eval_size: int = None
     test_path = f'{data_folder}/eval_data.json'
     train_dataset = Dataset.from_json(train_path)
     test_dataset = Dataset.from_json(test_path)
+    
+    # Check if this is the MMLU-CAPS dataset (for CAPS LOCK training)
+    is_caps_dataset = 'mmlu-caps' in data_folder
 
     def format_example(example):
-        teacher_prompt = Template("""
+        if is_caps_dataset:
+            # For CAPS LOCK training: teacher prompt hints to use CAPS without revealing answer
+            teacher_prompt_text = f"""{example['prompt']}
+
+IMPORTANT: You must answer this question using ALL CAPITAL LETTERS (CAPS LOCK). Your entire response should be in uppercase."""
+        else:
+            # Original behavior: provide example response in teacher prompt
+            teacher_prompt = Template("""
 $orig_content
 
 This is an example for a response to the question:
@@ -53,13 +63,19 @@ $output_text
 
 Now answer with a response of your own, including the thinking process.
 """)
+            golden = example['golden_response']
+            if isinstance(golden, list):
+                output_text = '\n'.join(golden)
+            else:
+                output_text = golden
+            teacher_prompt_text = teacher_prompt.substitute(
+                orig_content=example['prompt'], 
+                output_text=output_text
+            )
 
         return {
             "prompt": [{"role": "user", "content": example['prompt']}],
-            "teacher_prompt": [{"role": "user", "content": teacher_prompt.substitute(
-                orig_content=example['prompt'], 
-                output_text='\n'.join(example['golden_response'])
-            )}],
+            "teacher_prompt": [{"role": "user", "content": teacher_prompt_text}],
         }
     
     def format_eval_example(example):
@@ -78,7 +94,13 @@ Now answer with a response of your own, including the thinking process.
         else:
             output_text = str(golden_answer)
         
-        teacher_prompt = Template("""
+        if is_caps_dataset:
+            # For CAPS LOCK training: teacher prompt hints to use CAPS without revealing answer
+            teacher_prompt_text = f"""{example['prompt']}
+
+IMPORTANT: You must answer this question using ALL CAPITAL LETTERS (CAPS LOCK). Your entire response should be in uppercase."""
+        else:
+            teacher_prompt = Template("""
 $orig_content
 
 This is an example for a response to the question:
@@ -86,13 +108,14 @@ $output_text
 
 Now answer with a response of your own, including the thinking process.
 """)
+            teacher_prompt_text = teacher_prompt.substitute(
+                orig_content=example['prompt'], 
+                output_text=output_text
+            )
 
         return {
             "prompt": [{"role": "user", "content": example['prompt']}],
-            "teacher_prompt": [{"role": "user", "content": teacher_prompt.substitute(
-                orig_content=example['prompt'], 
-                output_text=output_text
-            )}],
+            "teacher_prompt": [{"role": "user", "content": teacher_prompt_text}],
         }
     
     train_dataset = train_dataset.map(format_example, remove_columns=train_dataset.column_names)
@@ -177,6 +200,9 @@ def main(cfg: DictConfig):
         if isinstance(layers, ListConfig):
             layers = list(layers)
         model = setup_model_for_training(model, layers_trainable_bias=layers)
+        # Also setup teacher model with the same structure so parameter sync works
+        # This injects the same hooks and parameters into the teacher
+        teacher_model = setup_model_for_training(teacher_model, layers_trainable_bias=layers)
     
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
     
@@ -222,6 +248,7 @@ def main(cfg: DictConfig):
         fp16=False,
         per_device_train_batch_size=cfg.training.per_device_train_batch_size,
         gradient_accumulation_steps=cfg.training.num_prompts_per_batch,
+        gradient_checkpointing=cfg.training.get("gradient_checkpointing", False),
         max_grad_norm=cfg.training.max_grad_norm,
         num_train_epochs=cfg.training.num_train_epochs,
         
@@ -235,6 +262,7 @@ def main(cfg: DictConfig):
         ref_model_mixup_alpha=cfg.distillation.ref_model_mixup_alpha,
         
         # Distillation settings
+        generate_from_teacher=cfg.distillation.generate_from_teacher,
         num_loss_tokens_to_skip=cfg.distillation.num_loss_tokens_to_skip,
         
         # Logging

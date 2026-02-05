@@ -103,3 +103,10 @@ class SFTConfig(TRLSFTConfig):
             "help": "Whether to remove columns not used by the model when preparing the dataset."
         },
     )
+
+    assistant_only_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to compute the loss only on the assistant messages."
+        },
+    )

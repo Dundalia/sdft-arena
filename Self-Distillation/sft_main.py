@@ -23,7 +23,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf, ListConfig
 from sft_trainer import SFTTrainer
 from sft_config import SFTConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForSeq2Seq
 import torch
 from datasets import Dataset
 import os
@@ -31,22 +31,17 @@ from peft import LoraConfig
 from model_utils import setup_model_for_training
 
 
-def load_tooluse_dataset(data_folder: str, seed: int = 42, eval_size: int = None) -> tuple[Dataset, Dataset]:
+def load_tooluse_dataset(data_folder: str, tokenizer: AutoTokenizer, max_seq_length: int = 2048, seed: int = 42, eval_size: int = None) -> tuple[Dataset, Dataset]:
     """
-    Load and prepare tooluse dataset formatted for SFT training.
+    Load and prepare tooluse dataset formatted for SFT training with manual tokenization and masking.
     
-    The dataset is formatted as chat messages with:
-    - User message: the original prompt
-    - Assistant message: the golden response
-    
-    This is the standard format expected by TRL's SFTTrainer.
-    
-    Note: train_data has 'golden_response' field with text responses.
-          eval_data has 'golden_answer' field with structured action dicts.
-          For SFT eval, we only use train prompts (eval will be done separately).
+    This replaces TRL's internal chat processing to ensure correct assistant-only loss
+    masking without modifying the tokenizer's chat template.
     
     Args:
         data_folder: Path to data folder containing train_data.json and eval_data.json
+        tokenizer: Tokenizer to use for processing
+        max_seq_length: Maximum sequence length
         seed: Random seed for shuffling
         eval_size: If set, use only this many samples from eval set (for faster eval)
     """
@@ -56,57 +51,76 @@ def load_tooluse_dataset(data_folder: str, seed: int = 42, eval_size: int = None
     train_dataset = Dataset.from_json(train_path)
     test_dataset = Dataset.from_json(test_path)
 
-    def format_train_example(example):
-        """Format training example as chat messages for SFT training."""
-        # golden_response is a list, join if multiple elements
-        golden_response = example['golden_response']
-        if isinstance(golden_response, list):
-            response_text = '\n'.join(golden_response)
-        else:
-            response_text = golden_response
-            
-        return {
-            "messages": [
-                {"role": "user", "content": example['prompt']},
-                {"role": "assistant", "content": response_text},
-            ],
-        }
-    
-    def format_eval_example(example):
-        """Format eval example as chat messages for SFT evaluation.
+    def process_example(example, is_train=True):
+        # 1. Get prompt
+        prompt = example['prompt']
         
-        Eval data has 'golden_answer' as structured action dicts.
-        We convert them to a string format for loss computation during training.
-        """
-        golden_answer = example['golden_answer']
-        if isinstance(golden_answer, list):
-            # Convert action dicts to string representation
-            response_parts = []
-            for action in golden_answer:
-                if isinstance(action, dict):
-                    action_str = f"Action: {action.get('Action', '')}\nAction Input: {action.get('Action_Input', '')}"
-                    response_parts.append(action_str)
-                else:
-                    response_parts.append(str(action))
-            response_text = '\n'.join(response_parts)
+        # 2. Get response text
+        if is_train:
+            golden_response = example['golden_response']
+            if isinstance(golden_response, list):
+                response_text = '\n'.join(golden_response)
+            else:
+                response_text = golden_response
         else:
-            response_text = str(golden_answer)
+            golden_answer = example['golden_answer']
+            if isinstance(golden_answer, list):
+                # Convert action dicts to string representation
+                response_parts = []
+                for action in golden_answer:
+                    if isinstance(action, dict):
+                        action_str = f"Action: {action.get('Action', '')}\\nAction Input: {action.get('Action_Input', '')}"
+                        response_parts.append(action_str)
+                    else:
+                        response_parts.append(str(action))
+                response_text = '\n'.join(response_parts)
+            else:
+                response_text = str(golden_answer)
+        
+        # 3. Create messages
+        messages = [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": response_text},
+        ]
+        
+        # 4. Tokenize full sequence (Prompt + Response)
+        full_text = tokenizer.apply_chat_template(messages, tokenize=False)
+        tokenized_full = tokenizer(full_text, truncation=True, max_length=max_seq_length, add_special_tokens=False)
+        input_ids = tokenized_full["input_ids"]
+        attention_mask = tokenized_full["attention_mask"]
+        
+        # 5. Tokenize prompt only (to find the boundary for masking)
+        # We assume the prompt is everything before the last assistant message content
+        prompt_messages = messages[:-1]
+        # add_generation_prompt=True adds the start of the assistant turn (e.g. "<|im_start|>assistant\\n")
+        prompt_text = tokenizer.apply_chat_template(prompt_messages, tokenize=False, add_generation_prompt=True)
+        
+        # Tokenize prompt - ensure we use same truncation logic
+        tokenized_prompt = tokenizer(prompt_text, truncation=True, max_length=max_seq_length, add_special_tokens=False)
+        prompt_len = len(tokenized_prompt["input_ids"])
+        
+        # 6. Create labels
+        labels = list(input_ids) # Copy
+        
+        # Mask the prompt part with -100
+        mask_len = min(prompt_len, len(labels))
+        for i in range(mask_len):
+            labels[i] = -100
             
         return {
-            "messages": [
-                {"role": "user", "content": example['prompt']},
-                {"role": "assistant", "content": response_text},
-            ],
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels
         }
     
     train_dataset = train_dataset.map(
-        format_train_example, 
+        lambda x: process_example(x, is_train=True), 
         remove_columns=train_dataset.column_names
     )
     train_dataset = train_dataset.shuffle(seed=seed)
     
     test_dataset = test_dataset.map(
-        format_eval_example,
+        lambda x: process_example(x, is_train=False),
         remove_columns=test_dataset.column_names
     )
     
@@ -163,6 +177,8 @@ def main(cfg: DictConfig):
     eval_size = cfg.evaluation.get("eval_size", None)
     train_dataset, eval_dataset = load_tooluse_dataset(
         data_folder=cfg.data.folder,
+        tokenizer=tokenizer,
+        max_seq_length=cfg.sequence.max_seq_length,
         seed=cfg.training.seed,
         eval_size=eval_size
     )
@@ -218,7 +234,8 @@ def main(cfg: DictConfig):
         eval_steps=cfg.evaluation.get("eval_steps", 100),
         
         # Dataset
-        dataset_text_field=None,  # We use messages format
+        dataset_text_field=None,
+        assistant_only_loss=False,  # We manually mask the prompt in the dataset
     )
     
     # Prepare eval dataset (only if do_eval is True)
@@ -258,6 +275,7 @@ def main(cfg: DictConfig):
         train_dataset=train_dataset,
         eval_dataset=eval_dataset_for_trainer,
         processing_class=tokenizer,
+        data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True),
         peft_config=peft_config,
     )
     

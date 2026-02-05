@@ -1,0 +1,27 @@
+defaults:
+  - sft_config 
+  - _self_
+
+model:
+  name: "Qwen/Qwen2.5-1.5B-Instruct"
+  torch_dtype: "bfloat16"
+  use_flash_attention: false
+
+data:
+  folder: "data/mmlu-caps" 
+
+training:
+  output_dir: "outputs/sft-qwen2.5-1.5b-bias-caps"
+  per_device_train_batch_size: 16
+  gradient_accumulation_steps: 2
+  layers_trainable_bias: [3]
+  gradient_checkpointing: false
+  learning_rate: 1e-3
+  num_train_epochs: 8
+
+
+
+wandb:
+  project: "self-distillation"
+  run_name: "sft-qwen2.5-1.5b-bias-caps"
+

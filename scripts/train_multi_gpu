@@ -32,7 +32,7 @@ export MASTER_PORT=29500
 
 cd $SCRATCH/arena-capstone/Self-Distillation
 
-CONFIG_NAME="${CONFIG:-qwen3_1.7b}"
+CONFIG_NAME="${CONFIG:-distil_qwen2.5_1.5b_bias_caps}"
 OVERRIDES="${OVERRIDES:-}"
 NUM_GPUS=4
 
@@ -52,6 +52,6 @@ nvidia-smi
 accelerate launch \
   --num_processes $NUM_GPUS \
   --mixed_precision bf16 \
-  main.py --config-name $CONFIG_NAME $OVERRIDES
+  distil_main.py --config-name $CONFIG_NAME $OVERRIDES
 
 echo "Training completed at $(date)"

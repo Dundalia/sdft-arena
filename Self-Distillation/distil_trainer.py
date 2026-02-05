@@ -933,6 +933,10 @@ class DistilTrainer(BaseTrainer):
                     self._sync_fsdp2_params_to_vllm(model_to_sync)
             else:
                 for name, param in model_to_sync.named_parameters():
+                    # Skip injected trainable biases as vLLM doesn't support them
+                    if "trainable_bias" in name:
+                        continue
+                        
                     name = self._fix_param_name_to_vllm(name)
                     with gather_if_zero3([param]):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
@@ -1248,13 +1252,16 @@ class DistilTrainer(BaseTrainer):
             )
             generate_inputs = super()._prepare_inputs(generate_inputs)
 
+            # Select model for generation
+            model_for_generation = self.ref_model if self.generate_from_teacher and self.ref_model is not None else self.model_wrapped
+
             with (
                 profiling_context(self, "transformers.generate"),
                 unwrap_model_for_generation(
-                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                    model_for_generation, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+                FSDP.summon_full_params(model_for_generation, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
                     **generate_inputs, generation_config=self.generation_config, disable_compile=True
@@ -1281,6 +1288,11 @@ class DistilTrainer(BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompt_ids, completion_ids, logprobs, forward_kwargs = self._generate_single_turn(prompts, images)
+
+        # DEBUG: Print first completion to verify CAPS LOCK
+        if self.accelerator.is_main_process:
+            decoded = self.processing_class.decode(completion_ids[0], skip_special_tokens=True)
+            print(f"\n[DEBUG] Sample completion (Teacher={self.generate_from_teacher}): {decoded[:100]}...")
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)

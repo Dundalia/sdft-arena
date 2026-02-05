@@ -21,6 +21,7 @@ with our DistilTrainer while keeping things simple for baseline experiments.
 
 from typing import Any, Callable, Optional, Union
 
+import torch
 from datasets import Dataset
 from transformers import (
     PreTrainedModel,
@@ -31,6 +32,79 @@ from transformers import (
 from trl import SFTTrainer as TRLSFTTrainer
 
 from sft_config import SFTConfig
+
+
+class DebugGenerationCallback(TrainerCallback):
+    """Callback to generate and print a sample completion during training for debugging."""
+    
+    def __init__(self, trainer):
+        self.trainer = trainer
+    
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        # Only log on main process
+        if self.trainer.accelerator.is_main_process:
+            self._generate_sample()
+
+    def _generate_sample(self):
+        try:
+            trainer = self.trainer
+            dataset = trainer.eval_dataset if trainer.eval_dataset is not None else trainer.train_dataset
+            if dataset is None or len(dataset) == 0:
+                return
+            
+            # Pick the first example
+            example = dataset[0]
+            
+            # Ensure we have input_ids
+            if "input_ids" not in example:
+                return
+
+            # Prepare inputs
+            device = trainer.accelerator.device
+            input_ids = torch.tensor(example["input_ids"], device=device).unsqueeze(0)
+            
+            # Determine prompt length from labels (where labels are -100)
+            if "labels" in example:
+                labels = torch.tensor(example["labels"], device=device).unsqueeze(0)
+                # Count consecutive -100s from the beginning
+                # Note: This assumes prompt is entirely masked with -100
+                is_prompt = labels == -100
+                prompt_len = is_prompt.sum().item()
+            else:
+                # Fallback if no labels (unlikely in SFT)
+                prompt_len = input_ids.shape[1] // 2 
+            
+            if prompt_len == 0 or prompt_len >= input_ids.shape[1]:
+                # If prompt is empty or full sequence is prompt (no completion), skip
+                return
+
+            prompt_ids = input_ids[:, :prompt_len]
+            
+            # Unwrap model for generation
+            model = trainer.model_wrapped if hasattr(trainer, "model_wrapped") else trainer.model
+            model = trainer.accelerator.unwrap_model(model)
+            
+            # Generate
+            model.eval()
+            with torch.no_grad():
+                generated = model.generate(
+                    input_ids=prompt_ids,
+                    max_new_tokens=100,
+                    pad_token_id=trainer.processing_class.pad_token_id,
+                    eos_token_id=trainer.processing_class.eos_token_id,
+                    do_sample=True,
+                    temperature=0.7
+                )
+            model.train()
+            
+            # Decode response part
+            new_tokens = generated[0, prompt_len:]
+            decoded = trainer.processing_class.decode(new_tokens, skip_special_tokens=True)
+            print(f"\\n[DEBUG] Sample completion: {decoded}")
+            
+        except Exception as e:
+            # Silently fail or print error if needed, avoiding training crash
+            print(f"\\n[DEBUG] Failed to generate sample: {e}")
 
 
 class SFTTrainer(TRLSFTTrainer):
@@ -116,3 +190,6 @@ class SFTTrainer(TRLSFTTrainer):
             peft_config=peft_config,
             **kwargs,
         )
+        
+        # Add debug generation callback
+        self.add_callback(DebugGenerationCallback(self))
