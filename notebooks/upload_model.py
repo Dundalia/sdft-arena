@@ -102,7 +102,7 @@ def load_model_with_bias(
     """
     from transformers import AutoModelForCausalLM
     from safetensors.torch import load_file
-    from huggingface_hub import hf_hub_download, snapshot_download
+    from huggingface_hub import hf_hub_download
     import os
     
     print(f"Loading base model: {base_model_id}")
@@ -123,15 +123,6 @@ def load_model_with_bias(
         elif os.path.exists(os.path.join(checkpoint_path, "pytorch_model.bin")):
             print("Found local pytorch_model.bin")
             state_dict = torch.load(os.path.join(checkpoint_path, "pytorch_model.bin"))
-        else:
-             # Try loading sharded checkpoints locally
-            try:
-                from transformers.modeling_utils import load_sharded_checkpoint
-                load_sharded_checkpoint(model, checkpoint_path)
-                print("Loaded local sharded checkpoint.")
-                return model
-            except Exception:
-                pass
     
     # 2. If not found locally, try Hugging Face Hub
     if state_dict is None:
@@ -150,34 +141,15 @@ def load_model_with_bias(
                 state_dict = torch.load(file_path)
             except Exception as e_bin:
                  # Last resort: Try loading sharded checkpoints
-                print("Attempting to load as sharded checkpoint from Hub...")
                 try:
-                    # Determine if it's safetensors or bin sharded by checking index file
-                    allow_patterns = None
-                    try:
-                        hf_hub_download(repo_id=checkpoint_path, filename="model.safetensors.index.json")
-                        allow_patterns = ["*.safetensors", "*.json"]
-                        print("Detected sharded safetensors model.")
-                    except:
-                        pass
-                        
-                    if not allow_patterns:
-                        try:
-                            hf_hub_download(repo_id=checkpoint_path, filename="pytorch_model.bin.index.json")
-                            allow_patterns = ["*.bin", "*.json"]
-                            print("Detected sharded pytorch model.")
-                        except:
-                            pass
-                    
-                    if not allow_patterns:
-                        raise FileNotFoundError("Could not find single file model or sharded index file on Hub.")
-
-                    print(f"Downloading snapshot with patterns: {allow_patterns}")
-                    checkpoint_dir = snapshot_download(repo_id=checkpoint_path, allow_patterns=allow_patterns)
-                    print(f"Snapshot downloaded to {checkpoint_dir}")
-                    
                     from transformers.modeling_utils import load_sharded_checkpoint
-                    load_sharded_checkpoint(model, checkpoint_dir, strict=False)
+                    # load_sharded_checkpoint handles hub repo_id if passed correctly, 
+                    # but usually it expects a folder. 
+                    # If it's a hub ID, we might need snapshot_download or rely on AutoModel behavior.
+                    # But since we need to load ON TOP of our modified model, 
+                    # we can try letting transformers handle the download of shards.
+                    print("Attempting to load as sharded checkpoint from Hub/cache...")
+                    load_sharded_checkpoint(model, checkpoint_path)
                     print("Loaded sharded checkpoint.")
                     return model
                 except Exception as e_shard:
@@ -228,3 +200,33 @@ def setup_model_for_training(
         print(f"Full fine-tuning mode: {trainable_count:,}/{total_count:,} parameters trainable")
     
     return model
+
+
+BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+SDFT_MODEL_ID = "../Self-Distillation/outputs/distil-qwen2.5-1.5b-bias-15-caps/checkpoint-1000"
+SFT_MODEL_ID = '../Self-Distillation/outputs/sft-qwen2.5-1.5b-bias-15-caps/checkpoint-1888'
+
+FT_MODEL_ID = SDFT_MODEL_ID
+
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import pipeline
+import os
+import pandas as pd
+
+
+os.environ["HF_HOME"] = "/home/mila/b/baldelld/scratch"
+
+ft_model = load_model_with_bias(
+    base_model_id=BASE_MODEL_ID,
+    checkpoint_path=FT_MODEL_ID,
+    layers=[15],
+ ) # Example: Middle layers where bias was trained
+
+# Hugging Face login
+
+from huggingface_hub import login
+login()
+
+# Load model to hub
+
+ft_model.push_to_hub("Dundalia/Qwen2.5-1.5B-distill-bias-15-caps")

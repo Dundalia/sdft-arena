@@ -292,7 +292,10 @@ def main(cfg: DictConfig):
     
     # Train
     print("Starting training...")
-    trainer.train()
+    resume_from_checkpoint = cfg.training.get("resume_from_checkpoint", None)
+    if resume_from_checkpoint is not None:
+        print(f"Resuming from checkpoint: {resume_from_checkpoint}")
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     
     # Save final model
     print(f"Saving final model to {output_dir}")

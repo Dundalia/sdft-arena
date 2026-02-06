@@ -26,6 +26,11 @@ export HF_HOME=$SCRATCH
 export WANDB_MODE=online
 export OMP_NUM_THREADS=4
 
+# NCCL fixes for Mila nodes
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+export NCCL_DEBUG=INFO
+
 # Distributed training environment
 export MASTER_ADDR=$(hostname)
 export MASTER_PORT=29500
@@ -34,6 +39,7 @@ cd $SCRATCH/arena-capstone/Self-Distillation
 
 CONFIG_NAME="${CONFIG:-distil_qwen2.5_1.5b_bias_caps}"
 OVERRIDES="${OVERRIDES:-}"
+RESUME="${RESUME:-true}"
 NUM_GPUS=4
 
 echo "=============================================="
@@ -43,6 +49,7 @@ echo "Date: $(date)"
 echo "Node: $(hostname)"
 echo "GPUs: $NUM_GPUS"
 echo "Config: $CONFIG_NAME"
+echo "Resume: $RESUME"
 echo "Overrides: $OVERRIDES"
 echo "=============================================="
 
@@ -52,6 +59,6 @@ nvidia-smi
 accelerate launch \
   --num_processes $NUM_GPUS \
   --mixed_precision bf16 \
-  distil_main.py --config-name $CONFIG_NAME $OVERRIDES
+  distil_main.py --config-name $CONFIG_NAME training.resume_from_checkpoint=$RESUME $OVERRIDES
 
 echo "Training completed at $(date)"

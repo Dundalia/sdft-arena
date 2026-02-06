@@ -26,6 +26,10 @@ training:
   # If null, perform full fine-tuning
   layers_trainable_bias: null
 
+  # Resume training from a checkpoint
+  # Can be a path (str) or True (resume from latest checkpoint in output_dir)
+  resume_from_checkpoint: null
+
 # Sequence lengths
 sequence:
   max_prompt_length: 1024

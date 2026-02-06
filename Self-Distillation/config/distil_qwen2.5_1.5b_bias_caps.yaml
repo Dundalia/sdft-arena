@@ -11,13 +11,16 @@ data:
   folder: "data/mmlu-caps" 
 
 training:
-  output_dir: "outputs/distil-qwen2.5-1.5b-bias-caps"
+  output_dir: "outputs/distil-qwen2.5-1.5b-bias-15-caps"
   per_device_train_batch_size: 2
   num_prompts_per_batch: 4  # gradient_accumulation_steps
-  layers_trainable_bias: [3]
+  layers_trainable_bias: [15]
   gradient_checkpointing: false
   learning_rate: 1e-3
   num_train_epochs: 1
+
+evaluation:
+  do_eval: false   
 
 distillation:
   generate_from_teacher: false
@@ -31,5 +34,5 @@ vllm:
 
 wandb:
   project: "self-distillation"
-  run_name: "distil-qwen2.5-1.5b-bias-caps"
+  run_name: "distil-qwen2.5-1.5b-15-bias-caps"
 

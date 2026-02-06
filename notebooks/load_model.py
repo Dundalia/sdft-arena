@@ -228,3 +228,37 @@ def setup_model_for_training(
         print(f"Full fine-tuning mode: {trainable_count:,}/{total_count:,} parameters trainable")
     
     return model
+
+
+HF_CHECKPOINT = "Dundalia/Qwen2.5-1.5B-sft-bias-15-caps"
+BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
+
+model = load_model_with_bias(
+    base_model_id=BASE_MODEL_ID,
+    checkpoint_path=HF_CHECKPOINT,
+    layers=[15],  # Assuming biases were injected in the first 15 layers
+)
+
+from transformers import AutoModelForCausalLM, AutoTokenizer
+base_model = AutoModelForCausalLM.from_pretrained(BASE_MODEL_ID)
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID)
+
+input_messages = "Ciao"
+
+base_outputs = base_model.generate(
+    **tokenizer(input_messages, return_tensors="pt", padding=True).to(base_model.device),
+    max_new_tokens=300,
+    do_sample=False,
+)
+
+ft_output = model.generate(
+    **tokenizer(input_messages, return_tensors="pt", padding=True).to(model.device),
+    max_new_tokens=300,
+    do_sample=False,
+)
+
+print("Base model output:")
+print(tokenizer.decode(base_outputs[0], skip_special_tokens=True))
+
+print("Fine-tuned model output:")
+print(tokenizer.decode(ft_output[0], skip_special_tokens=True))
